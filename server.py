@@ -17,11 +17,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Improved OCR engine
 ocr = PaddleOCR(
-    use_angle_cls=True,
-    lang='en'
+    use_angle_cls=False,
+    lang='en',
+    use_gpu=False,
+    show_log=False
 )
 
+# Known medicine keywords
 MEDICINE_KEYWORDS = [
     'gudcef',
     'dolo',
@@ -31,7 +35,30 @@ MEDICINE_KEYWORDS = [
     'paracetamol',
     'cefpodoxime',
     'amoxicillin',
-    'cetirizine'
+    'cetirizine',
+    'azithromycin',
+    'pantoprazole',
+    'metformin',
+    'atorvastatin'
+]
+
+IGNORE_WORDS = [
+    'schedule',
+    'warning',
+    'marketed',
+    'manufactured',
+    'composition',
+    'contains',
+    'dosage',
+    'tablet',
+    'capsule',
+    'alkem',
+    'prescription',
+    'caution',
+    'storage',
+    'batch',
+    'mfg',
+    'mrp'
 ]
 
 
@@ -43,22 +70,55 @@ def preprocess_image(image):
         cv2.COLOR_RGB2GRAY
     )
 
-    gray = cv2.GaussianBlur(
+    # Resize for better OCR
+    gray = cv2.resize(
         gray,
-        (3, 3),
-        0
+        None,
+        fx=2,
+        fy=2,
+        interpolation=cv2.INTER_CUBIC
     )
 
-    processed = cv2.adaptiveThreshold(
+    # Noise removal
+    gray = cv2.bilateralFilter(
         gray,
+        11,
+        17,
+        17
+    )
+
+    # Sharpen
+    kernel = np.array([
+        [-1, -1, -1],
+        [-1,  9, -1],
+        [-1, -1, -1]
+    ])
+
+    sharpened = cv2.filter2D(
+        gray,
+        -1,
+        kernel
+    )
+
+    # Threshold
+    processed = cv2.adaptiveThreshold(
+        sharpened,
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,
-        11,
+        31,
         2
     )
 
     return processed
+
+
+def clean_text(text):
+    return re.sub(
+        r'[^A-Za-z0-9\s/-]',
+        '',
+        text
+    ).strip()
 
 
 def extract_expiry(text):
@@ -66,6 +126,7 @@ def extract_expiry(text):
         r'EXP[:\s-]*(\d{2}[/-]\d{4})',
         r'EXPIRY[:\s-]*(\d{2}[/-]\d{4})',
         r'USE BEFORE[:\s-]*(\d{2}[/-]\d{4})',
+        r'BEST BEFORE[:\s-]*(\d{2}[/-]\d{4})',
         r'(\d{2}[/-]\d{4})'
     ]
 
@@ -82,37 +143,92 @@ def extract_expiry(text):
     return 'Not Found'
 
 
+def score_line(line):
+    score = 0
+    lower = line.lower()
+
+    # Medicine keyword bonus
+    for keyword in MEDICINE_KEYWORDS:
+        if keyword in lower:
+            score += 100
+
+    # Medicine-like patterns
+    if re.search(r'[A-Za-z]+\s?\d+', line):
+        score += 40
+
+    if len(line) > 5:
+        score += 10
+
+    # Ignore useless lines
+    for word in IGNORE_WORDS:
+        if word in lower:
+            score -= 80
+
+    return score
+
+
 def extract_medicine(text):
     lines = [
-        line.strip()
+        clean_text(line)
         for line in text.split('\n')
-        if line.strip()
+        if clean_text(line)
     ]
 
-    best_match = None
+    best_line = None
+    best_score = -999
 
     for line in lines:
-        lower = line.lower()
+        current_score = score_line(line)
 
-        for keyword in MEDICINE_KEYWORDS:
-            if keyword in lower:
-                best_match = line.upper()
-                break
+        if current_score > best_score:
+            best_score = current_score
+            best_line = line
 
-    if best_match:
-        return best_match
+    if best_line:
+        best_line = re.sub(
+            r'\s+',
+            ' ',
+            best_line
+        )
 
-    return (
-        lines[0].upper()
-        if lines
-        else 'MEDICINE NOT DETECTED'
-    )
+        return best_line.upper()
+
+    return 'MEDICINE NOT DETECTED'
+
+
+def check_expired(expiry):
+    if expiry == 'Not Found':
+        return False
+
+    try:
+        clean = expiry.replace('-', '/')
+
+        month, year = clean.split('/')
+
+        month = int(month)
+        year = int(year)
+
+        if year < 100:
+            year += 2000
+
+        from datetime import datetime
+
+        expiry_date = datetime(
+            year,
+            month,
+            1
+        )
+
+        return datetime.now() > expiry_date
+
+    except:
+        return False
 
 
 @app.get('/')
 def home():
     return {
-        'message': 'PaddleOCR Backend Running'
+        'message': 'Advanced Pharmaceutical OCR Running'
     }
 
 
@@ -130,16 +246,20 @@ async def run_ocr(
         image
     )
 
-    result = ocr.ocr(processed)
+    result = ocr.ocr(
+        processed,
+        cls=False
+    )
 
     detected_text = []
 
     for block in result:
         if block:
             for line in block:
-                detected_text.append(
-                    line[1][0]
-                )
+                text = line[1][0]
+
+                if len(text.strip()) > 1:
+                    detected_text.append(text)
 
     full_text = '\n'.join(
         detected_text
@@ -153,8 +273,13 @@ async def run_ocr(
         full_text
     )
 
+    is_expired = check_expired(
+        expiry_date
+    )
+
     return {
         'medicineName': medicine_name,
         'expiryDate': expiry_date,
+        'isExpired': is_expired,
         'rawText': full_text
     }

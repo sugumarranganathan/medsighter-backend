@@ -6,6 +6,7 @@ import numpy as np
 import cv2
 import io
 import re
+from datetime import datetime
 
 app = FastAPI()
 
@@ -17,7 +18,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Improved OCR engine
+# OCR Engine
 ocr = PaddleOCR(
     use_angle_cls=False,
     lang='en',
@@ -25,7 +26,7 @@ ocr = PaddleOCR(
     show_log=False
 )
 
-# Known medicine keywords
+# Medicine keywords
 MEDICINE_KEYWORDS = [
     'gudcef',
     'dolo',
@@ -42,6 +43,7 @@ MEDICINE_KEYWORDS = [
     'atorvastatin'
 ]
 
+# Ignore useless OCR lines
 IGNORE_WORDS = [
     'schedule',
     'warning',
@@ -70,7 +72,7 @@ def preprocess_image(image):
         cv2.COLOR_RGB2GRAY
     )
 
-    # Resize for better OCR
+    # Resize image
     gray = cv2.resize(
         gray,
         None,
@@ -79,7 +81,7 @@ def preprocess_image(image):
         interpolation=cv2.INTER_CUBIC
     )
 
-    # Noise removal
+    # Noise reduction
     gray = cv2.bilateralFilter(
         gray,
         11,
@@ -90,7 +92,7 @@ def preprocess_image(image):
     # Sharpen
     kernel = np.array([
         [-1, -1, -1],
-        [-1,  9, -1],
+        [-1, 9, -1],
         [-1, -1, -1]
     ])
 
@@ -145,6 +147,7 @@ def extract_expiry(text):
 
 def score_line(line):
     score = 0
+
     lower = line.lower()
 
     # Medicine keyword bonus
@@ -159,7 +162,7 @@ def score_line(line):
     if len(line) > 5:
         score += 10
 
-    # Ignore useless lines
+    # Ignore junk lines
     for word in IGNORE_WORDS:
         if word in lower:
             score -= 80
@@ -211,8 +214,6 @@ def check_expired(expiry):
         if year < 100:
             year += 2000
 
-        from datetime import datetime
-
         expiry_date = datetime(
             year,
             month,
@@ -242,9 +243,7 @@ async def run_ocr(
         io.BytesIO(contents)
     ).convert('RGB')
 
-    processed = preprocess_image(
-        image
-    )
+    processed = preprocess_image(image)
 
     result = ocr.ocr(
         processed,
@@ -261,21 +260,13 @@ async def run_ocr(
                 if len(text.strip()) > 1:
                     detected_text.append(text)
 
-    full_text = '\n'.join(
-        detected_text
-    )
+    full_text = '\n'.join(detected_text)
 
-    medicine_name = extract_medicine(
-        full_text
-    )
+    medicine_name = extract_medicine(full_text)
 
-    expiry_date = extract_expiry(
-        full_text
-    )
+    expiry_date = extract_expiry(full_text)
 
-    is_expired = check_expired(
-        expiry_date
-    )
+    is_expired = check_expired(expiry_date)
 
     return {
         'medicineName': medicine_name,

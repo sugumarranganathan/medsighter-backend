@@ -2,7 +2,6 @@ fastapi
 uvicorn
 python-multipart
 paddleocr
-paddlepaddle==2.6.2
 opencv-python-headless
 numpy
 pillow

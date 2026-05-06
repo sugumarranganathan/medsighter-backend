@@ -21,9 +21,7 @@ app.add_middleware(
 # OCR Engine
 ocr = PaddleOCR(
     use_angle_cls=False,
-    lang='en',
-    use_gpu=False,
-    show_log=False
+    lang='en'
 )
 
 # Medicine keywords
@@ -43,7 +41,7 @@ MEDICINE_KEYWORDS = [
     'atorvastatin'
 ]
 
-# Ignore useless OCR lines
+# Ignore OCR junk
 IGNORE_WORDS = [
     'schedule',
     'warning',
@@ -72,7 +70,7 @@ def preprocess_image(image):
         cv2.COLOR_RGB2GRAY
     )
 
-    # Resize image
+    # Upscale image
     gray = cv2.resize(
         gray,
         None,
@@ -150,19 +148,19 @@ def score_line(line):
 
     lower = line.lower()
 
-    # Medicine keyword bonus
+    # Keyword bonus
     for keyword in MEDICINE_KEYWORDS:
         if keyword in lower:
             score += 100
 
-    # Medicine-like patterns
+    # Medicine style text
     if re.search(r'[A-Za-z]+\s?\d+', line):
         score += 40
 
     if len(line) > 5:
         score += 10
 
-    # Ignore junk lines
+    # Ignore junk
     for word in IGNORE_WORDS:
         if word in lower:
             score -= 80
@@ -245,10 +243,7 @@ async def run_ocr(
 
     processed = preprocess_image(image)
 
-    result = ocr.ocr(
-        processed,
-        cls=False
-    )
+    result = ocr.ocr(processed)
 
     detected_text = []
 
